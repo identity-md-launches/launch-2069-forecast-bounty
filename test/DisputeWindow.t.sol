@@ -338,6 +338,57 @@ contract DisputeWindowTest is ProtocolTestBase {
         _assertSolvent();
     }
 
+    function testThirdValueOverturnNeverPaysSlashToTheResolverItself() public {
+        // The creator forecasts on its own bounty and resolves wrongly; the panel's third value makes the
+        // creator's own entry the corrected winner. The slash must still leave the resolver and go to the disputer.
+        _stakeCreator();
+        uint256 id = _create();
+        _forecast(id, creator, 50);
+        _forecast(id, alice, 0);
+        _resolve(id, 0);
+        _challenge(id, 100);
+        uint256 resolverBefore = token.balanceOf(creator) + stake.stakeOf(address(bounty), creator);
+        uint256 challengerBefore = token.balanceOf(challenger);
+        vm.prank(C.disputeSigner1);
+        disputes.voteValue(address(bounty), id, 49);
+        vm.prank(C.disputeSigner2);
+        disputes.voteValue(address(bounty), id, 49);
+        bounty.finalize(id);
+        uint256 slash = (C.RESOLVER_STAKE * C.SLASH_BPS) / 10_000;
+        assertEq(bounty.getBounty(id).winner, creator);
+        assertTrue(bounty.getBounty(id).resolutionOverturned);
+        assertEq(stake.stakeOf(address(bounty), creator), C.RESOLVER_STAKE - slash);
+        assertEq(resolverBefore - (token.balanceOf(creator) + stake.stakeOf(address(bounty), creator)), slash);
+        assertEq(token.balanceOf(challenger), challengerBefore + slash);
+        assertEq(disputes.credit(challenger), 2 * C.BOND);
+        _assertSolvent();
+    }
+
+    function testThirdValueOverturnWithNoEntriesStillSlashesToDisputer() public {
+        _stakeCreator();
+        uint256 id = _create();
+        _resolve(id, 5);
+        _challenge(id, 7);
+        uint256 challengerBefore = token.balanceOf(challenger);
+        vm.prank(C.disputeSigner1);
+        disputes.voteValue(address(bounty), id, 9);
+        vm.prank(C.disputeSigner3);
+        disputes.voteValue(address(bounty), id, 9);
+        bounty.finalize(id);
+        uint256 slash = (C.RESOLVER_STAKE * C.SLASH_BPS) / 10_000;
+        assertEq(bounty.getBounty(id).winner, address(0));
+        assertTrue(bounty.getBounty(id).resolutionOverturned);
+        assertEq(stake.stakeOf(address(bounty), creator), C.RESOLVER_STAKE - slash);
+        assertEq(token.balanceOf(challenger), challengerBefore + slash);
+        assertEq(disputes.credit(challenger), 2 * C.BOND);
+        // The creator still reclaims the reward of an empty bounty; the stake lock is released after settlement.
+        vm.prank(creator);
+        bounty.refundReward(id);
+        vm.prank(creator);
+        stake.withdraw(address(bounty), C.RESOLVER_STAKE - slash);
+        _assertSolvent();
+    }
+
     function testSockDisputerCannotRecoverResolverSlash() public {
         uint256 id = _resolved(); // alice 10 wins at 11
         // The resolver's second wallet takes the slot with a bogus value; the panel picks the real one.

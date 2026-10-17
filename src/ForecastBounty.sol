@@ -278,12 +278,18 @@ contract ForecastBounty is TokenPool {
         registry.transition(bountyId, BountyRegistry.State.Finalized, item.trueValue);
         if (outcome == DisputeWindow.Outcome.TimedOut) emit ResolutionTimedOut(bountyId);
         emit BountyFinalized(bountyId, item.trueValue, item.winner, overturned);
-        // The slash goes to the disputer only when the panel matched the disputer's own value. When the panel
-        // chose a third value, the disputer's claim was wrong too (possibly a resolver's sock filling the slot),
-        // so the slash goes to the corrected winner, the forecaster the wrong resolution harmed.
+        // The slash goes to the disputer when the panel matched the disputer's own value. When the panel chose a
+        // third value, the disputer's claim was wrong too (possibly a resolver's sock filling the slot), so the
+        // slash goes to the corrected winner, the forecaster the wrong resolution harmed. The overturned resolver
+        // never receives its own slash, and an overturned resolution is always slashed: when the corrected winner
+        // is the resolver itself (a creator forecasting on its own bounty) or there is no winner (no entries), the
+        // slash falls back to the disputer, whose challenge still succeeded.
         address slashTo = decision.disputer;
-        if (overturned && decision.correctedValue != decision.finalValue) slashTo = item.winner;
-        resolverStake.settle(bountyId, overturned && slashTo != address(0), slashTo);
+        if (
+            overturned && decision.correctedValue != decision.finalValue && item.winner != address(0)
+                && item.winner != decision.resolver
+        ) slashTo = item.winner;
+        resolverStake.settle(bountyId, overturned, slashTo);
     }
 
     function _expire(uint256 bountyId, Bounty storage item) private {
