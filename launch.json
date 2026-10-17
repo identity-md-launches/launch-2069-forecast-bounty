@@ -1,0 +1,69 @@
+{
+  "kind": "evm_project",
+  "token": {
+    "contract": "LaunchToken",
+    "name": "Forecast Bounty",
+    "symbol": "FORECAST",
+    "decimals": 18
+  },
+  "contracts": [
+    {
+      "contract": "BountyRegistry",
+      "constructorArgs": []
+    },
+    {
+      "contract": "DisputeWindow",
+      "constructorArgs": [
+        "$token",
+        "100000000000000000000",
+        "172800",
+        "0xaf5a05077da3e3d130d66c1c73362306cc89d899",
+        "0xc4f6e66c24fdc6ae0f859c468dd177f8100b4959",
+        "0xc9b5c6b29f66d526b76e68198f70d66342b0d84c"
+      ]
+    },
+    {
+      "contract": "ResolverStake",
+      "constructorArgs": [
+        "$token",
+        "25000000000000000000000",
+        "2000"
+      ]
+    },
+    {
+      "contract": "ForecastBounty",
+      "constructorArgs": [
+        "$token",
+        "$contract:BountyRegistry",
+        "$contract:ResolverStake",
+        "$contract:DisputeWindow",
+        "5000000000000000000000",
+        "100000000000000000000",
+        "500"
+      ]
+    },
+    {
+      "contract": "BountySubsidy",
+      "constructorArgs": [
+        "$token",
+        "$contract:ForecastBounty",
+        "5000000000000000000000"
+      ]
+    },
+    {
+      "contract": "ResolverBootstrap",
+      "constructorArgs": [
+        "$token",
+        "$contract:ForecastBounty",
+        "$contract:ResolverStake"
+      ]
+    }
+  ],
+  "pool": {
+    "pairedCurrency": "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+    "fee": 12500,
+    "tickSpacing": 60,
+    "initialPrice": "79228162514264337593543950336"
+  },
+  "notes": "Forecast Bounty Protocol. LaunchToken (src/LaunchToken.sol) is ForecastToken: fixed-supply ERC-20 'Forecast Bounty' / FORECAST, 18 decimals, 1,000,000,000 minted once to the factory; no owner, mint, burn, pause, fee, blocklist or upgrade. Application contracts, in constructor dependency order, all with static arguments from src/DeploymentConfig.sol and none with an owner, pause, proxy or initialization call: BountyRegistry (no arguments) is the append-only index of bounties, namespaced by the calling market so only ForecastBounty writes its own records. DisputeWindow(token, BOND 100e18, DISPUTE_WINDOW 172800 s = 48 hours, signer1, signer2, signer3) holds dispute bonds and escalates to the immutable three-signer panel (2 of 3 decides); the signers are the brief's mainnet EOAs 0xAF5a05077Da3e3D130d66C1C73362306cc89d899, 0xC4F6e66C24fDc6Ae0f859c468dd177f8100b4959 and 0xc9b5c6b29F66D526b76e68198F70d66342b0d84c, distinct and non-zero (constructor reverts with DuplicateSigner / ZeroAddress otherwise). ResolverStake(token, RESOLVER_STAKE 25,000e18, SLASH_BPS 2000) holds resolver stakes; permissionless deposit; a successfully disputed resolver loses 20% to the disputer. ForecastBounty(token, BountyRegistry, ResolverStake, DisputeWindow, MIN_REWARD 5,000e18, BOND 100e18, MAX_ENTRIES 500) is the market: createBounty, hidden forecasts until resolve, resolve by a staked resolver, claim, withdrawBond (never gated), refundReward. BountySubsidy(token, ForecastBounty, MIN_REWARD 5,000e18) and ResolverBootstrap(token, ForecastBounty, ResolverStake) are donation pools with a permissionless deposit() and no admin withdraw; they are not funded by the factory split and start empty, the requester funds them from their own wallet after launch. No contract receives any of the supply at launch; the factory alone splits it (pool share, automatic 10% swarm via MerkleDistributor, remainder to the paying wallet) so poolBps and remainderTo are not manifest fields. No $owner argument exists because no contract has an owner. Pool: paired with IMD at 0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7 as the launch chose, fee 12500 (the chain's 1.25% LaunchFees fee), tickSpacing 60, initialPrice written as the launch gives it; the deployer derives the opening price from the policy's opening market cap."
+}
