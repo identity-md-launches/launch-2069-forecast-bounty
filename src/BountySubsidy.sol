@@ -41,7 +41,12 @@ contract BountySubsidy is DonationPool {
         }
         if (subsidised[bountyId]) revert AlreadySubsidised();
         uint256 other = openBounty[msg.sender];
-        if (other != 0 && !bounty.isClosed(other)) revert OtherSubsidisedBountyOpen();
+        // A subsidised bounty frees the creator's slot only once it ran: Finalized with at least one entry.
+        // A refunded or expired subsidised bounty keeps the slot, so create/refund loops cannot farm grants.
+        if (
+            other != 0
+                && (bounty.getBounty(other).state != BountyRegistry.State.Finalized || bounty.entryCount(other) == 0)
+        ) revert OtherSubsidisedBountyOpen();
         subsidised[bountyId] = true;
         openBounty[msg.sender] = bountyId;
         _release(SUBSIDY_AMOUNT);

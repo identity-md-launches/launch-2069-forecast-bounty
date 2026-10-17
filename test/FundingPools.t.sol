@@ -73,6 +73,7 @@ contract FundingPoolsTest is ProtocolTestBase {
         uint256 otherCreatorId = _createAs(bob);
         vm.prank(bob);
         subsidy.subsidize(otherCreatorId);
+        _forecast(id1, alice, 1);
         _stakeCreator();
         _resolve(id1, 0);
         uint256 id3 = _create();
@@ -88,7 +89,7 @@ contract FundingPoolsTest is ProtocolTestBase {
         _assertSolvent();
     }
 
-    function testRefundedBountyReleasesSubsidySlotButNoDuplicateGrant() public {
+    function testRefundedSubsidisedBountyKeepsSlotSoCreateRefundLoopCannotFarm() public {
         uint256 id = _create();
         vm.prank(alice);
         subsidy.deposit(2 * C.SUBSIDY_AMOUNT);
@@ -102,8 +103,25 @@ contract FundingPoolsTest is ProtocolTestBase {
         subsidy.subsidize(id);
         uint256 next = _create();
         vm.prank(creator);
+        vm.expectRevert(BountySubsidy.OtherSubsidisedBountyOpen.selector);
         subsidy.subsidize(next);
+        assertEq(subsidy.totalReleased(), C.SUBSIDY_AMOUNT);
         _assertSolvent();
+    }
+
+    function testSubsidisedBountyFinalizedWithoutEntriesKeepsSlot() public {
+        uint256 id = _create();
+        vm.prank(alice);
+        subsidy.deposit(2 * C.SUBSIDY_AMOUNT);
+        vm.prank(creator);
+        subsidy.subsidize(id);
+        _stakeCreator();
+        _resolve(id, 0);
+        _finalize(id);
+        uint256 next = _create();
+        vm.prank(creator);
+        vm.expectRevert(BountySubsidy.OtherSubsidisedBountyOpen.selector);
+        subsidy.subsidize(next);
     }
 
     function testLateSubsidyAndInsufficientPoolCannotPay() public {

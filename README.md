@@ -69,7 +69,7 @@ IDs start at 1. Forecasts and true values are `int256`, including both integer e
 3. Following the brief's creator-resolution wording, **only that bounty's creator may resolve**. The creator approves `ResolverStake`, calls `deposit(bountyAddress, amount)` to stake at least 25,000 FORECAST for this specific market, and separately approves `ForecastBounty` for a 100 FORECAST resolution bond. `resolve(bountyId, trueValue)` is allowed from the deadline until seven days later, unless already refunded. It makes one bounded pass over entries. Smallest absolute error wins; **earliest submitted entry wins an exact tie**. `BountyResolved` announces the provisional value and winner.
 4. Immediately after resolution, **every participant may `withdrawBond(bountyId)` in full**, even during a dispute. This includes the winner. The participant bond never funds arbitration or slashing and no panel vote or administrator can block it.
 5. The reward remains locked during the dispute window or a pending panel case. Anyone may call `finalize(bountyId)` when eligible. `claim(bountyId)` also attempts finalization and then pays only the final winner, once. A successful dispute recomputes the winner with the panel's accepted value before any reward transfer.
-6. The creator may `refundReward(bountyId)` after the deadline if unresolved, or immediately after resolving a bounty with zero entries. An unresolved refund cancels the bounty and unlocks participant bonds. Resolving an empty bounty still carries its independent dispute bond and stake lock until finalization. A finalized bounty with entries cannot be refunded unless the panel timed out.
+6. The creator may `refundReward(bountyId)` after the deadline if unresolved, or immediately after resolving a bounty with zero entries. An unresolved refund cancels the bounty and unlocks participant bonds. Resolving an empty bounty still carries its independent dispute bond and stake lock until finalization. A finalized bounty with entries cannot be refunded.
 
 **Creator refund discretion is part of the requested behavior:** the creator can reclaim an unresolved reward at the entry deadline rather than resolve. Participation therefore does not guarantee a reward will be distributed. A refund and a resolution compete by transaction order; only the first valid state transition succeeds.
 
@@ -100,11 +100,11 @@ Each immutable signer gets exactly one vote per case, across both methods. **Two
 | No challenge by 48 hours | Original closest forecast | Resolver recovers its 100 | Released on bounty finalization |
 | Panel agrees with original | Original closest forecast | Resolver receives both bonds (200) | No slash |
 | Panel selects a different value | Recomputed closest forecast | Disputer receives both bonds (200), even if the panel chose a third value | Reserved 20% penalty paid to disputer |
-| No exact-value majority within seven days of challenge | Creator refund; no winner | Each side recovers its own 100 | Released, no slash |
+| No exact-value majority within seven days of challenge | Original resolution stands (original winner) | Each side recovers its own 100 | Released, no slash |
 
 The 7-day panel timeout is fixed in `DeploymentConfig`. At its exact boundary, voting stops and permissionless finalization becomes available. This avoids permanent custody if signers disappear or all vote differently. Participants can recover their bonds throughout. The panel has no other contract powers and cannot change its own members.
 
-Window payouts are pull payments: recipients call `DisputeWindow.withdrawPayout()`. Slashing is delivered during `ForecastBounty.finalize`; a panel decision alone does not yet unlock the stake. A winner's eligible claim can finalize automatically. On panel timeout, anyone should finalize the bounty before the creator requests its refund.
+Window payouts are pull payments: recipients call `DisputeWindow.withdrawPayout()`. Slashing is delivered during `ForecastBounty.finalize`; a panel decision alone does not yet unlock the stake. A winner's eligible claim can finalize automatically.
 
 `ResolverStake.deposit(bountyAddress, amount)` credits the caller; `depositFor(bountyAddress, resolver, amount)` permits third-party funding. Deposits explicitly select the market whose code can lock and slash them. Use the canonical bounty address from the deployment handoff. A counterfeit market cannot touch the canonical market's balances, locks, registry records, or dispute cases.
 
@@ -123,7 +123,7 @@ The brief does not specify subsidy amounts or bootstrap release rules. This impl
 
 Each release requires the full grant amount in credited donations. Insufficient funding reverts without consuming eligibility. Cumulative releases never exceed credited donations. The bootstrap helps retain active resolvers; it does **not** provide the initial 25,000 stake or grant resolution rights to an unfunded address.
 
-These are permissionless incentives with **no Sybil resistance**. Subsidies are not clawed back after a creator refund, and creators can sequentially create/refund subsidised bounties. Self-funded questions and alternate wallets can qualify for grants. Donors should budget these finite pools with that eligibility in mind; no admin can ration or recover donations. There is no invented allowlist or requester-controlled funding override.
+These are permissionless incentives with **no Sybil resistance**. A creator's subsidy slot is freed only when the subsidised bounty reaches Finalized with at least one entry; a refunded/expired or empty subsidised bounty keeps the slot permanently, so create/refund loops get at most one grant per address. Self-funded questions and alternate wallets can qualify for grants. Donors should budget these finite pools with that eligibility in mind; no admin can ration or recover donations. There is no invented allowlist or requester-controlled funding override.
 
 ## Registry and operational responsibilities
 
@@ -138,4 +138,4 @@ After launch:
 - Any user or keeper may finalize or expire eligible bounties. Integration code must distinguish provisional and final winners and present timeout/refund states.
 - The launch workflow publishes accepted source on GitHub, verifies deployed bytecode, provides the actual deployment/pool addresses, and reconfirms the pinned signer addresses before deployment. No transaction was broadcast by this implementation task.
 
-Two colluding signers can choose a false value; an unattended window accepts the creator's value. The fixed minimum stake does not scale with bounty size. Alternate wallets can recover their own slash by being the successful disputer. These are trust/economic limits, not administrative powers or oracle guarantees. See [SECURITY.md](SECURITY.md) for the local adversarial review and remaining review responsibilities.
+Two colluding signers can choose a false value; an unattended window accepts the creator's value. The fixed minimum stake does not scale with bounty size. The slash (and both bonds) go to the disputer only when the panel's value equals the disputer's corrected value; when the panel picks a third value, the slash goes to the corrected winner instead, so a resolver's sock wallet filling the single dispute slot with a bogus value cannot recover the slash. An alternate wallet that disputes with the exact true value still can. These are trust/economic limits, not administrative powers or oracle guarantees. See [SECURITY.md](SECURITY.md) for the local adversarial review and remaining review responsibilities.

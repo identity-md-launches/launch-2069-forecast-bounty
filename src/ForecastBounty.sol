@@ -269,21 +269,21 @@ contract ForecastBounty is TokenPool {
         DisputeWindow.Case memory decision = disputeWindow.getCase(address(this), bountyId);
         bool overturned = outcome == DisputeWindow.Outcome.Overturned;
         item.resolutionOverturned = overturned;
-        if (outcome == DisputeWindow.Outcome.TimedOut) {
-            item.state = BountyRegistry.State.Refunded;
-            item.winner = address(0);
-            registry.transition(bountyId, BountyRegistry.State.Refunded, item.trueValue);
-            emit ResolutionTimedOut(bountyId);
-        } else {
-            if (overturned) {
-                item.trueValue = decision.finalValue;
-                item.winner = _closest(bountyId, item.trueValue);
-            }
-            item.state = BountyRegistry.State.Finalized;
-            registry.transition(bountyId, BountyRegistry.State.Finalized, item.trueValue);
-            emit BountyFinalized(bountyId, item.trueValue, item.winner, overturned);
+        // A panel that never reaches quorum leaves the original resolution standing, unslashed.
+        if (overturned) {
+            item.trueValue = decision.finalValue;
+            item.winner = _closest(bountyId, item.trueValue);
         }
-        resolverStake.settle(bountyId, overturned, decision.disputer);
+        item.state = BountyRegistry.State.Finalized;
+        registry.transition(bountyId, BountyRegistry.State.Finalized, item.trueValue);
+        if (outcome == DisputeWindow.Outcome.TimedOut) emit ResolutionTimedOut(bountyId);
+        emit BountyFinalized(bountyId, item.trueValue, item.winner, overturned);
+        // The slash goes to the disputer only when the panel matched the disputer's own value. When the panel
+        // chose a third value, the disputer's claim was wrong too (possibly a resolver's sock filling the slot),
+        // so the slash goes to the corrected winner, the forecaster the wrong resolution harmed.
+        address slashTo = decision.disputer;
+        if (overturned && decision.correctedValue != decision.finalValue) slashTo = item.winner;
+        resolverStake.settle(bountyId, overturned && slashTo != address(0), slashTo);
     }
 
     function _expire(uint256 bountyId, Bounty storage item) private {

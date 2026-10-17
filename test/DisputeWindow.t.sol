@@ -137,7 +137,7 @@ contract DisputeWindowTest is ProtocolTestBase {
         _assertSolvent();
     }
 
-    function testThreeDifferentPanelValuesTimeOutWithoutPickingAnArbitraryWinner() public {
+    function testThreeDifferentPanelValuesTimeOutKeepingOriginalResolution() public {
         uint256 id = _resolved();
         _challenge(id, 21);
         _vote(id, C.disputeSigner1, true);
@@ -146,7 +146,8 @@ contract DisputeWindowTest is ProtocolTestBase {
         disputes.voteValue(address(bounty), id, -10);
         vm.warp(disputes.getCase(address(bounty), id).panelEndsAt);
         bounty.finalize(id);
-        assertEq(uint8(bounty.getBounty(id).state), uint8(BountyRegistry.State.Refunded));
+        assertEq(uint8(bounty.getBounty(id).state), uint8(BountyRegistry.State.Finalized));
+        assertEq(bounty.getBounty(id).winner, alice);
         assertEq(stake.stakeOf(address(bounty), creator), C.RESOLVER_STAKE);
         assertEq(disputes.credit(creator), C.BOND);
         assertEq(disputes.credit(challenger), C.BOND);
@@ -242,7 +243,7 @@ contract DisputeWindowTest is ProtocolTestBase {
         assertEq(stake.activeLocks(address(bounty), creator), 0);
     }
 
-    function testPanelTimeoutReturnsBondsCancelsRewardAndReleasesStake() public {
+    function testPanelTimeoutReturnsBondsKeepsWinnerAndReleasesStake() public {
         uint256 id = _resolved();
         _challenge(id, 21);
         _vote(id, C.disputeSigner1, true);
@@ -257,15 +258,15 @@ contract DisputeWindowTest is ProtocolTestBase {
         vm.expectRevert(DisputeWindow.PanelExpired.selector);
         disputes.vote(address(bounty), id, true);
         bounty.finalize(id);
-        assertEq(uint8(bounty.getBounty(id).state), uint8(BountyRegistry.State.Refunded));
-        assertEq(bounty.getBounty(id).winner, address(0));
+        assertEq(uint8(bounty.getBounty(id).state), uint8(BountyRegistry.State.Finalized));
+        assertEq(bounty.getBounty(id).winner, alice);
         assertEq(disputes.credit(creator), C.BOND);
         assertEq(disputes.credit(challenger), C.BOND);
         assertEq(stake.stakeOf(address(bounty), creator), C.RESOLVER_STAKE);
         vm.prank(alice);
-        vm.expectRevert(ForecastBounty.NotResolved.selector);
         bounty.claim(id);
         vm.prank(creator);
+        vm.expectRevert(ForecastBounty.RewardAlreadyPaid.selector);
         bounty.refundReward(id);
         vm.prank(creator);
         disputes.withdrawPayout();
@@ -277,9 +278,9 @@ contract DisputeWindowTest is ProtocolTestBase {
         bounty.withdrawBond(id);
         vm.prank(carol);
         bounty.withdrawBond(id);
-        assertEq(token.balanceOf(creator), ALLOCATION);
+        assertEq(token.balanceOf(creator), ALLOCATION - C.MIN_REWARD);
         assertEq(token.balanceOf(challenger), ALLOCATION);
-        assertEq(token.balanceOf(alice), ALLOCATION);
+        assertEq(token.balanceOf(alice), ALLOCATION + C.MIN_REWARD);
         assertEq(token.balanceOf(bob), ALLOCATION);
         assertEq(token.balanceOf(carol), ALLOCATION);
         _assertSolvent();
@@ -316,6 +317,39 @@ contract DisputeWindowTest is ProtocolTestBase {
         bounty.finalize(id);
         assertEq(bounty.getBounty(id).winner, accepted ? bob : alice);
         assertEq(stake.stakeOf(address(bounty), creator), accepted ? 20_000e18 : C.RESOLVER_STAKE);
+        _assertSolvent();
+    }
+
+    function testThirdValueOverturnPaysSlashToCorrectedWinnerNotWrongDisputer() public {
+        uint256 id = _resolved();
+        _challenge(id, 99);
+        vm.prank(C.disputeSigner1);
+        disputes.voteValue(address(bounty), id, -9);
+        vm.prank(C.disputeSigner2);
+        disputes.voteValue(address(bounty), id, -9);
+        uint256 carolBefore = token.balanceOf(carol);
+        uint256 challengerBefore = token.balanceOf(challenger);
+        bounty.finalize(id);
+        assertEq(bounty.getBounty(id).winner, carol);
+        uint256 slash = (C.RESOLVER_STAKE * C.SLASH_BPS) / 10_000;
+        assertEq(token.balanceOf(carol), carolBefore + slash);
+        assertEq(token.balanceOf(challenger), challengerBefore);
+        assertEq(stake.stakeOf(address(bounty), creator), C.RESOLVER_STAKE - slash);
+        _assertSolvent();
+    }
+
+    function testSockDisputerCannotRecoverResolverSlash() public {
+        uint256 id = _resolved(); // alice 10 wins at 11
+        // The resolver's second wallet takes the slot with a bogus value; the panel picks the real one.
+        _challenge(id, 1000);
+        vm.prank(C.disputeSigner1);
+        disputes.voteValue(address(bounty), id, 21);
+        vm.prank(C.disputeSigner3);
+        disputes.voteValue(address(bounty), id, 21);
+        uint256 challengerBefore = token.balanceOf(challenger);
+        bounty.finalize(id);
+        assertEq(bounty.getBounty(id).winner, bob);
+        assertEq(token.balanceOf(challenger), challengerBefore);
         _assertSolvent();
     }
 }
