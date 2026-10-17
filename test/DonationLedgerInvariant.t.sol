@@ -8,6 +8,7 @@ import {ForecastBounty} from "src/ForecastBounty.sol";
 import {BountySubsidy} from "src/BountySubsidy.sol";
 import {ResolverBootstrap} from "src/ResolverBootstrap.sol";
 import {ResolverStake} from "src/ResolverStake.sol";
+import {DisputeWindow} from "src/DisputeWindow.sol";
 import {LaunchToken} from "src/LaunchToken.sol";
 import {DonationPool} from "src/lib/DonationPool.sol";
 import {TokenPool} from "src/lib/TokenPool.sol";
@@ -21,18 +22,23 @@ contract DonationLedgerHandler is Test {
     BountySubsidy internal subsidy;
     ResolverBootstrap internal bootstrap;
     ResolverStake internal stake;
+    DisputeWindow internal disputes;
+    address internal entrant;
     DonationPool[2] internal pools;
     address[4] internal actors;
     uint256[4] internal openIds;
     uint256[4] internal deadlines;
     uint256[4] internal resolvedIds;
     bool[4] internal subsidised;
+    /// @dev A creator's subsidy slot is held from a grant until that bounty finalizes with an entry.
+    bool[4] internal slotHeld;
     bool[4] internal bootstrapped;
     uint256[2] public credited;
     uint256[2] public uncredited;
     uint256[2] public received;
     uint256[2] public released;
     uint256 public rotations;
+    uint256 public ranToFinality;
 
     constructor(
         LaunchToken t,
@@ -41,13 +47,16 @@ contract DonationLedgerHandler is Test {
         ResolverBootstrap r,
         address[4] memory users,
         uint256[4] memory open,
-        uint256[4] memory finalized
+        uint256[4] memory finalized,
+        address forecaster
     ) {
         token = t;
         bounty = b;
         subsidy = s;
         bootstrap = r;
         stake = b.resolverStake();
+        disputes = b.disputeWindow();
+        entrant = forecaster;
         pools = [DonationPool(address(s)), DonationPool(address(r))];
         actors = users;
         openIds = open;
@@ -95,12 +104,14 @@ contract DonationLedgerHandler is Test {
         bytes4 reason;
         if (vm.getBlockTimestamp() >= deadlines[a]) reason = BountySubsidy.IneligibleBounty.selector;
         else if (subsidised[a]) reason = BountySubsidy.AlreadySubsidised.selector;
+        else if (slotHeld[a]) reason = BountySubsidy.OtherSubsidisedBountyOpen.selector;
         else if (credited[0] - released[0] < C.SUBSIDY_AMOUNT) reason = DonationPool.InsufficientPool.selector;
         vm.prank(actors[a]);
         if (reason != bytes4(0)) vm.expectRevert(reason);
         subsidy.subsidize(openIds[a]);
         if (reason != bytes4(0)) return;
         subsidised[a] = true;
+        slotHeld[a] = true;
         released[0] += C.SUBSIDY_AMOUNT;
     }
 
@@ -117,14 +128,34 @@ contract DonationLedgerHandler is Test {
         released[1] += C.BOOTSTRAP_AMOUNT;
     }
 
-    /// @dev Close the previous grant's bounty and open another, allowing repeated subsidy releases
-    /// without discarding the one-open-bounty rule. Time moves only through the EVM cheatcode.
-    function replaceOpenBounty(uint256 a) external {
+    /// @dev Close the actor's open bounty and open another. A bounty that runs to finality with an entry
+    /// frees a held subsidy slot; a refunded one keeps it, so refund loops cannot farm grants.
+    /// Time moves only through the EVM cheatcode.
+    function replaceOpenBounty(uint256 a, bool run) external {
         a %= 4;
         if (rotations >= 32) return;
-        if (vm.getBlockTimestamp() < deadlines[a]) vm.warp(deadlines[a]);
-        vm.prank(actors[a]);
-        bounty.refundReward(openIds[a]);
+        uint256 id = openIds[a];
+        if (run && vm.getBlockTimestamp() < deadlines[a]) {
+            vm.prank(entrant);
+            bounty.forecast(id, int256(a));
+            vm.warp(deadlines[a]);
+            vm.prank(actors[a]);
+            bounty.resolve(id, int256(a));
+            vm.warp(disputes.getCase(address(bounty), id).endsAt);
+            bounty.finalize(id);
+            vm.prank(entrant);
+            bounty.claim(id);
+            vm.prank(entrant);
+            bounty.withdrawBond(id);
+            vm.prank(actors[a]);
+            disputes.withdrawPayout();
+            if (subsidised[a]) slotHeld[a] = false;
+            ++ranToFinality;
+        } else {
+            if (vm.getBlockTimestamp() < deadlines[a]) vm.warp(deadlines[a]);
+            vm.prank(actors[a]);
+            bounty.refundReward(id);
+        }
         deadlines[a] = vm.getBlockTimestamp() + 1 days;
         vm.prank(actors[a]);
         openIds[a] = bounty.createBounty("Next question", deadlines[a], "Record", C.MIN_REWARD);
@@ -175,7 +206,7 @@ contract DonationLedgerInvariantTest is StdInvariant, ProtocolTestBase {
         for (uint256 a; a < 4; ++a) {
             open[a] = _createAs(actors[a]);
         }
-        handler = new DonationLedgerHandler(token, bounty, subsidy, bootstrap, actors, open, resolved);
+        handler = new DonationLedgerHandler(token, bounty, subsidy, bootstrap, actors, open, resolved, challenger);
         // Begin with both available funds and unsynced surplus; neither pool is vacuous.
         handler.deposit(0, 0, 2 * C.SUBSIDY_AMOUNT);
         handler.deposit(1, 1, 2 * C.BOOTSTRAP_AMOUNT - 1);

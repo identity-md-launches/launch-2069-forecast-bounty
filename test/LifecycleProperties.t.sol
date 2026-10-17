@@ -53,17 +53,16 @@ contract LifecyclePropertiesTest is ProtocolTestBase {
         bounty.finalize(id);
         _withdrawRotated(id, entrants, rotation, 4, 5);
         ForecastBounty.Bounty memory item = bounty.getBounty(id);
-        if (outcome == 3) {
-            assertEq(uint8(item.state), uint8(BountyRegistry.State.Refunded));
-            vm.prank(creator);
-            bounty.refundReward(id);
-        } else {
-            int256 truth = outcome == 2 ? corrected : proposed;
-            _assertWinner(id, entrants, values, truth);
-            assertEq(item.trueValue, truth);
-            vm.prank(item.winner);
-            bounty.claim(id);
-        }
+        // A panel without quorum leaves the original resolution standing; it never voids the winner.
+        assertEq(uint8(item.state), uint8(BountyRegistry.State.Finalized));
+        int256 truth = outcome == 2 ? corrected : proposed;
+        _assertWinner(id, entrants, values, truth);
+        assertEq(item.trueValue, truth);
+        vm.prank(creator);
+        vm.expectRevert(ForecastBounty.NotRefundable.selector);
+        bounty.refundReward(id);
+        vm.prank(item.winner);
+        bounty.claim(id);
         // Credits may accumulate independently of reward/bond withdrawal.
         if (outcome != 2) {
             vm.prank(creator);
@@ -78,10 +77,8 @@ contract LifecyclePropertiesTest is ProtocolTestBase {
         stake.withdraw(address(bounty), C.RESOLVER_STAKE - penalty);
         for (uint256 i; i < 5; ++i) {
             uint256 expected = ALLOCATION;
-            if (outcome != 3) {
-                if (entrants[i] == creator) expected -= reward;
-                if (entrants[i] == item.winner) expected += reward;
-            }
+            if (entrants[i] == creator) expected -= reward;
+            if (entrants[i] == item.winner) expected += reward;
             if (outcome == 1) {
                 if (entrants[i] == creator) expected += C.BOND;
                 if (entrants[i] == challenger) expected -= C.BOND;
