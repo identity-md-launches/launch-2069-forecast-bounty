@@ -21,17 +21,25 @@ forge build
 FOUNDRY_FUZZ_SEED=0x79a003b85502e7f82d26b841c2a3ecd5c94f417c32c19f0fc9b1c332ff4e7526 forge test
 ```
 
-The new lifecycle property runs 1,000 examples. The additional invariant campaigns run 256 sequences
+The lifecycle fuzz properties run 1,000 examples each. The additional invariant campaigns run 256 sequences
 at depths 96 (stake) and 64 (donation pools), with settings carried in the test source.
 
 All tests use local deployments and can also run under `forge test --fork-url <mainnet RPC URL>`.
 A mainnet fork run was not performed in this environment. Factory allocation and Uniswap pool creation
 are outside these additional application tests; the actual factory is not deployed by these fixtures.
 
-## Reported, not asserted
+## Reported, then fixed
 
-`.imd-findings.json` reports two slash-routing defects from the third-value rule in
-`ForecastBounty._finalize`. When the creator's own entry is the corrected winner, the slash goes back to
-the resolver. When the bounty is empty and overturned, no slash happens at all. It also reports a low
-deviation: a refunded subsidised bounty holds the creator's subsidy slot forever. No test here asserts
-the slash behaviour; the proofs in the findings fail on the current code.
+The previous round reported two slash-routing defects in `ForecastBounty._finalize`'s third-value rule:
+the slash went back to the resolver when the creator's own entry was the corrected winner, and an empty,
+overturned bounty was never slashed. The current implementation fixes both.
+`LifecycleProperties.testFuzzOverturnSlashRoutingAndConservation` now locks the rule in over 1,000 panel
+decisions with random entrant sets, ties and creator entries. Every overturn slashes exactly `SLASH_BPS`.
+The slash goes to the disputer when the panel matched the disputer's value. Otherwise it goes to the
+forecaster who wins under the panel value, checked independently, or to the disputer when that winner is
+the resolver or nobody. No other wallet's balance moves. This property fails on the pre-fix code
+(counterexample: every entry 0, creator entering, proposed 17, disputer 25, panel 0).
+
+Still reported in `.imd-findings.json` as low: a refunded or expired subsidised bounty holds the creator's
+subsidy slot forever, which is stricter than the brief's "no other subsidised bounty open". The
+implementation documents this as deliberate anti-farming, and `DonationLedgerInvariant` models it as it is.

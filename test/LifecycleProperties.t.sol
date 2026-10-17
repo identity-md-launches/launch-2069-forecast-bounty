@@ -97,6 +97,88 @@ contract LifecyclePropertiesTest is ProtocolTestBase {
         _assertSolvent();
     }
 
+    /// @notice An overturned resolution is always slashed by exactly SLASH_BPS of the required stake, the slash
+    /// never returns to the resolver, and it goes to the disputer when the panel agreed with the disputer, otherwise
+    /// to the forecaster who wins under the panel's value (falling back to the disputer when that is the resolver
+    /// or nobody). Small values make ties, creator wins and panel-equals-disputer decisions frequent.
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzzOverturnSlashRoutingAndConservation(
+        int8[4] memory raw,
+        uint8 entrantMask,
+        int8 rawProposed,
+        int8 rawCorrected,
+        int8 rawPanel
+    ) public {
+        int256 proposed = rawProposed;
+        int256 corrected = rawCorrected == rawProposed ? proposed + 1 : int256(rawCorrected);
+        int256 panel = rawPanel == rawProposed ? corrected : int256(rawPanel);
+        address[4] memory who = [creator, alice, bob, challenger];
+        uint256 id = _create();
+        for (uint256 i; i < 4; ++i) {
+            if (entrantMask & (1 << i) != 0) _forecast(id, who[i], raw[i]);
+        }
+        _stakeCreator();
+        _resolve(id, proposed);
+        _challenge(id, corrected);
+        uint256[4] memory before;
+        for (uint256 i; i < 4; ++i) {
+            before[i] = token.balanceOf(who[i]);
+        }
+        uint256 supplyHeld = _held();
+        vm.prank(C.disputeSigner2);
+        disputes.voteValue(address(bounty), id, panel);
+        vm.prank(C.disputeSigner3);
+        disputes.voteValue(address(bounty), id, panel);
+        bounty.finalize(id);
+
+        _assertOverturnRouting(id, raw, entrantMask, who, before, supplyHeld, corrected, panel);
+    }
+
+    function _assertOverturnRouting(
+        uint256 id,
+        int8[4] memory raw,
+        uint8 entrantMask,
+        address[4] memory who,
+        uint256[4] memory before,
+        uint256 supplyHeld,
+        int256 corrected,
+        int256 panel
+    ) private view {
+        ForecastBounty.Bounty memory item = bounty.getBounty(id);
+        assertTrue(item.resolutionOverturned);
+        assertEq(item.trueValue, panel);
+        address expectedWinner = _closestOf(raw, entrantMask, who, panel);
+        assertEq(item.winner, expectedWinner);
+        address expectedTo = challenger;
+        if (panel != corrected && expectedWinner != address(0) && expectedWinner != creator) {
+            expectedTo = expectedWinner;
+        }
+        uint256 slash = (C.RESOLVER_STAKE * C.SLASH_BPS) / 10_000;
+        assertEq(stake.stakeOf(address(bounty), creator), C.RESOLVER_STAKE - slash, "overturn must slash exactly");
+        for (uint256 i; i < 4; ++i) {
+            uint256 expected = before[i] + (who[i] == expectedTo ? slash : 0);
+            assertEq(token.balanceOf(who[i]), expected, "slash paid to the wrong wallet");
+        }
+        assertEq(disputes.credit(challenger), 2 * C.BOND);
+        assertEq(disputes.credit(creator), 0);
+        assertEq(_held() + slash, supplyHeld, "slash must leave the protocol only to its recipient");
+        _assertSolvent();
+    }
+
+    /// @dev Independent check of the corrected winner: closest under the panel value, earliest entry on ties.
+    function _closestOf(int8[4] memory raw, uint8 entrantMask, address[4] memory who, int256 truth)
+        private
+        pure
+        returns (address winner)
+    {
+        uint256 best = type(uint256).max;
+        for (uint256 i; i < 4; ++i) {
+            if (entrantMask & (1 << i) == 0) continue;
+            uint256 err = _error(raw[i], truth);
+            if (err < best) (best, winner) = (err, who[i]);
+        }
+    }
+
     function testEveryForecastIdenticalIncludingSignedMinimumStillHasAWinner() public {
         uint256 id = _create();
         address[5] memory entrants = [creator, alice, bob, carol, challenger];
@@ -152,6 +234,10 @@ contract LifecyclePropertiesTest is ProtocolTestBase {
         emit ForecastBounty.BountyResolved(id, -42, alice);
         vm.prank(creator);
         bounty.resolve(id, -42);
+    }
+
+    function _held() private view returns (uint256) {
+        return token.balanceOf(address(bounty)) + token.balanceOf(address(stake)) + token.balanceOf(address(disputes));
     }
 
     function _withdrawRotated(uint256 id, address[5] memory entrants, uint256 rotation, uint256 start, uint256 end)
